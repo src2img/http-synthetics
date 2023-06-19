@@ -1,0 +1,31 @@
+name: Image Build
+on: 
+  push:
+    paths-ignore:
+      - README.md
+    branches: 
+      - main
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write  # To be able to push images and signatures
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+      - name: Install Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.20.x'
+          #cache: true # can only be used with a go.sum
+          check-latest: true
+      - name: Install Ko
+        uses: ko-build/setup-ko@v0.6
+        with:
+          version: v0.13.0
+      - name: Build image
+        env:
+          KO_DOCKER_REPO: ghcr.io/src2img/http-synthetics
+        run: |
+          ko build . --bare --sbom=none
