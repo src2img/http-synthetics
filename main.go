@@ -28,9 +28,33 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", port)}
+
+	livecheckCode := 204
+
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintf(w, "Hello, World! I am using %s by the way.", runtime.Version())
+		})
+
+		http.HandleFunc("/livecheck", func(w http.ResponseWriter, request *http.Request) {
+			if request.Method != "PUT" {
+				w.WriteHeader(livecheckCode)
+				return
+			}
+
+			queryParameters := request.URL.Query()
+			if !queryParameters.Has("code") {
+				w.WriteHeader(400)
+				return
+			}
+			code, err := strconv.Atoi(queryParameters.Get("code"))
+			if err != nil {
+				w.WriteHeader(400)
+				return
+			}
+
+			livecheckCode = code
+			w.WriteHeader(204)
 		})
 
 		http.HandleFunc("/sleep", func(w http.ResponseWriter, request *http.Request) {
