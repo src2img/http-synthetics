@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"golang.org/x/net/websocket"
 )
 
 func main() {
@@ -72,6 +75,17 @@ func main() {
 				return
 			}
 		})
+
+		http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
+			log.Printf("starting websocket handler for an echo service")
+
+			count, err := io.Copy(ws, ws)
+			if err != nil {
+				log.Printf("copy failed in websocket handler: %v", err)
+			}
+
+			log.Printf("stopping websocket handler after copying %d bytes", count)
+		}))
 
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("failed to start server: %v", err)
