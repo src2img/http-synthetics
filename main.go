@@ -18,6 +18,8 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+var toggle bool
+
 func main() {
 	ctx := context.Background()
 	signals := make(chan os.Signal, 1)
@@ -123,6 +125,26 @@ func main() {
 			} else {
 				w.WriteHeader(400)
 				return
+			}
+		})
+
+		http.HandleFunc("/flaky", func(w http.ResponseWriter, request *http.Request) {
+			toggle = !toggle
+
+			var httpStatusCode int = http.StatusBadGateway
+			if queryParameters := request.URL.Query(); queryParameters.Has("code") {
+				var err error
+				httpStatusCode, err = strconv.Atoi(queryParameters.Get("code"))
+				if err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			}
+
+			if toggle {
+				w.WriteHeader(http.StatusOK)
+			} else {
+				w.WriteHeader(httpStatusCode)
 			}
 		})
 
