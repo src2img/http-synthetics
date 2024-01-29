@@ -42,8 +42,13 @@ func main() {
 	var sigtermUrl *string
 	sigtermUrlDelay := 5 * time.Second
 
+	var doNotTerminate = false
+	var silentShutdown = false
+	var forceClose = false
+
 	go func() {
 		http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+			log.Println("Answering a Hello World request")
 			fmt.Fprintf(w, "Hello, World! I am using %s by the way.", runtime.Version())
 		})
 
@@ -89,6 +94,40 @@ func main() {
 			}
 
 			w.WriteHeader(204)
+		})
+
+		http.HandleFunc("/close", func(w http.ResponseWriter, request *http.Request) {
+			queryParameters := request.URL.Query()
+
+			if queryParameters.Get("force") == "true" {
+				forceClose = true
+			}
+
+			if queryParameters.Get("silent") == "true" {
+				silentShutdown = true
+			}
+
+			if queryParameters.Get("terminate") == "false" {
+				doNotTerminate = true
+			}
+
+			delay := 0
+
+			if queryParameters.Has("delay") {
+				var err error
+				delay, err = strconv.Atoi(queryParameters.Get("delay"))
+				if err != nil {
+					w.WriteHeader(400)
+					return
+				}
+			}
+
+			w.WriteHeader(202)
+
+			go func() {
+				time.Sleep(time.Duration(delay) * time.Second)
+				signals <- os.Interrupt
+			}()
 		})
 
 		http.HandleFunc("/livecheck", func(w http.ResponseWriter, request *http.Request) {
@@ -166,7 +205,9 @@ func main() {
 
 	<-signals
 
-	log.Print("Received SIGTERM")
+	if !silentShutdown {
+		log.Print("Received shutdown request")
+	}
 
 	if sigtermUrl != nil {
 		time.Sleep(sigtermUrlDelay)
@@ -187,9 +228,18 @@ func main() {
 		}
 	}
 
-	log.Printf("shutting down server")
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("failed to shutdown server: %v", err)
+	if !silentShutdown {
+		log.Printf("shutting down server")
+	}
+
+	if forceClose {
+		if err := srv.Close(); err != nil {
+			log.Fatalf("failed to close server: %v", err)
+		}
+	} else {
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Fatalf("failed to shutdown server: %v", err)
+		}
 	}
 
 	if afterShutDownUrl != nil {
@@ -209,5 +259,9 @@ func main() {
 				log.Printf("Successfully called %s after server close with status %d", *afterShutDownUrl, resp.StatusCode)
 			}
 		}
+	}
+
+	if doNotTerminate {
+		<-signals
 	}
 }
