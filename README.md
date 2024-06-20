@@ -14,4 +14,5 @@ An HTTP server with test methods for synthetic tests:
 * `GET /livecheck` returns 204 initially. `PUT /livecheck?code=newCode` changes this.
 `delay` argument can be provided which overrides the default five seconds that it waits before it performs the call.
 * `GET /sleep?delay=5` will return a 204 after five seconds.
+* `GET /write-regularly?interval=1&count=10` will respond with 200 and write a 4 kB message into the response body every n seconds defined by the interval, n times defined by the count.
 * `/ws` endpoint serves a websocket with an echo service that return everything that is send to it.

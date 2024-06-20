@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"log"
@@ -184,6 +185,54 @@ func main() {
 				w.WriteHeader(http.StatusOK)
 			} else {
 				w.WriteHeader(httpStatusCode)
+			}
+		})
+
+		http.HandleFunc("/write-regularly", func(w http.ResponseWriter, request *http.Request) {
+			queryParameters := request.URL.Query()
+
+			var intervalSeconds, count int
+			var err error
+
+			if queryParameters.Has("interval") {
+				intervalSeconds, err = strconv.Atoi(queryParameters.Get("interval"))
+				if err != nil {
+					w.WriteHeader(400)
+					return
+				}
+			} else {
+				w.WriteHeader(400)
+				return
+			}
+
+			if queryParameters.Has("count") {
+				count, err = strconv.Atoi(queryParameters.Get("count"))
+				if err != nil {
+					w.WriteHeader(400)
+					return
+				}
+			} else {
+				w.WriteHeader(400)
+				return
+			}
+
+			message := make([]byte, 4<<10)
+			_, err = rand.Read(message)
+			if err != nil {
+				log.Printf("Error while creating random message: %v", err)
+				w.WriteHeader(500)
+				return
+			}
+
+			w.WriteHeader(200)
+
+			for i := 0; i < count; i++ {
+				time.Sleep(time.Duration(intervalSeconds) * time.Second)
+				_, err = w.Write(message)
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
 			}
 		})
 
