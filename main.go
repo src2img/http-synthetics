@@ -132,6 +132,27 @@ func main() {
 			}()
 		})
 
+		http.HandleFunc("/env", func(w http.ResponseWriter, request *http.Request) {
+			if request.Method != "GET" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+
+			queryParameters := request.URL.Query()
+			if !queryParameters.Has("env") {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+
+			_, err := w.Write([]byte(os.Getenv(queryParameters.Get("env"))))
+			if err != nil {
+				log.Printf("Error while writing message: %v", err)
+				return
+			}
+		})
+
 		http.HandleFunc("/livecheck", func(w http.ResponseWriter, request *http.Request) {
 			if request.Method != "PUT" {
 				w.WriteHeader(livecheckCode)
