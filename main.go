@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,7 +57,7 @@ func main() {
 		http.HandleFunc("/call-after-server-shutdown", func(w http.ResponseWriter, request *http.Request) {
 			queryParameters := request.URL.Query()
 			if !queryParameters.Has("url") {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 
@@ -66,19 +67,19 @@ func main() {
 			if queryParameters.Has("delay") {
 				delay, err := strconv.Atoi(queryParameters.Get("delay"))
 				if err != nil {
-					w.WriteHeader(400)
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 				afterShutDownUrlDelay = time.Duration(delay) * time.Second
 			}
 
-			w.WriteHeader(204)
+			w.WriteHeader(http.StatusNoContent)
 		})
 
 		http.HandleFunc("/call-before-server-shutdown", func(w http.ResponseWriter, request *http.Request) {
 			queryParameters := request.URL.Query()
 			if !queryParameters.Has("url") {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 
@@ -88,13 +89,13 @@ func main() {
 			if queryParameters.Has("delay") {
 				delay, err := strconv.Atoi(queryParameters.Get("delay"))
 				if err != nil {
-					w.WriteHeader(400)
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 				sigtermUrlDelay = time.Duration(delay) * time.Second
 			}
 
-			w.WriteHeader(204)
+			w.WriteHeader(http.StatusNoContent)
 		})
 
 		http.HandleFunc("/close", func(w http.ResponseWriter, request *http.Request) {
@@ -118,12 +119,12 @@ func main() {
 				var err error
 				delay, err = strconv.Atoi(queryParameters.Get("delay"))
 				if err != nil {
-					w.WriteHeader(400)
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 			}
 
-			w.WriteHeader(202)
+			w.WriteHeader(http.StatusAccepted)
 
 			go func() {
 				time.Sleep(time.Duration(delay) * time.Second)
@@ -139,17 +140,43 @@ func main() {
 
 			queryParameters := request.URL.Query()
 			if !queryParameters.Has("code") {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 			code, err := strconv.Atoi(queryParameters.Get("code"))
 			if err != nil {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 
 			livecheckCode = code
-			w.WriteHeader(204)
+			w.WriteHeader(http.StatusNoContent)
+		})
+
+		http.HandleFunc("/request-header", func(w http.ResponseWriter, request *http.Request) {
+			if request.Method != "GET" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+
+			queryParameters := request.URL.Query()
+			if !queryParameters.Has("header") {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+
+			headerValues, exists := request.Header[queryParameters.Get("header")]
+			if !exists {
+				return
+			}
+
+			_, err := w.Write([]byte(strings.Join(headerValues, ",")))
+			if err != nil {
+				log.Printf("Error while writing message: %v", err)
+				return
+			}
 		})
 
 		http.HandleFunc("/sleep", func(w http.ResponseWriter, request *http.Request) {
@@ -157,13 +184,13 @@ func main() {
 			if queryParameters.Has("delay") {
 				seconds, err := strconv.Atoi(queryParameters.Get("delay"))
 				if err != nil {
-					w.WriteHeader(400)
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 				time.Sleep(time.Second * time.Duration(seconds))
-				w.WriteHeader(204)
+				w.WriteHeader(http.StatusNoContent)
 			} else {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 		})
@@ -197,22 +224,22 @@ func main() {
 			if queryParameters.Has("interval") {
 				intervalSeconds, err = strconv.Atoi(queryParameters.Get("interval"))
 				if err != nil {
-					w.WriteHeader(400)
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 			} else {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 
 			if queryParameters.Has("count") {
 				count, err = strconv.Atoi(queryParameters.Get("count"))
 				if err != nil {
-					w.WriteHeader(400)
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
 			} else {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 
@@ -224,7 +251,7 @@ func main() {
 				return
 			}
 
-			w.WriteHeader(200)
+			w.WriteHeader(http.StatusOK)
 
 			for i := 0; i < count; i++ {
 				time.Sleep(time.Duration(intervalSeconds) * time.Second)
