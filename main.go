@@ -98,6 +98,33 @@ func main() {
 			w.WriteHeader(http.StatusNoContent)
 		})
 
+		http.HandleFunc("/claim-memory", func(w http.ResponseWriter, request *http.Request) {
+			if request.Method != "PUT" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+
+			queryParameters := request.URL.Query()
+
+			if !queryParameters.Has("amount") {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			amount, err := strconv.Atoi(queryParameters.Get("amount"))
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			data := make([]byte, amount)
+			for i := 0; i < amount; i++ {
+				data[i] = byte(i % 256)
+			}
+
+			w.WriteHeader(http.StatusNoContent)
+		})
+
 		http.HandleFunc("/close", func(w http.ResponseWriter, request *http.Request) {
 			queryParameters := request.URL.Query()
 
