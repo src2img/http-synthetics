@@ -5,10 +5,12 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -99,7 +101,7 @@ func main() {
 		})
 
 		http.HandleFunc("/claim-memory", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != "PUT" {
+			if request.Method != http.MethodPut {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
@@ -159,8 +161,147 @@ func main() {
 			}()
 		})
 
+		http.HandleFunc("/compute-resource-token", func(w http.ResponseWriter, request *http.Request) {
+			if request.Method != http.MethodGet && request.Method != http.MethodPut {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+
+			tokenFileInfo, err := os.Stat("/var/run/secrets/codeengine.cloud.ibm.com/compute-resource-token/token")
+			if err != nil {
+				if os.IsNotExist(err) {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintf(w, "%v", err)
+				return
+			}
+
+			if tokenFileInfo.IsDir() {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+
+			tokenFileData, err := os.ReadFile("/var/run/secrets/codeengine.cloud.ibm.com/compute-resource-token/token")
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintf(w, "%v", err)
+				return
+			}
+
+			switch request.Method {
+			case http.MethodGet:
+				tokenParts := strings.Split(string(tokenFileData), ".")
+				if len(tokenParts) != 3 {
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, "expected three parts in token file separated by dot, but found %d", len(tokenParts))
+					return
+				}
+
+				header, err := base64.RawURLEncoding.DecodeString(tokenParts[0])
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, "%v", err)
+					return
+				}
+
+				body, err := base64.RawURLEncoding.DecodeString(tokenParts[1])
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, "%v", err)
+					return
+				}
+
+				signature := tokenParts[2]
+
+				w.Header().Add("Content-Type", "application/json")
+				_, err = w.Write([]byte("{\"header\":"))
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+				_, err = w.Write(header)
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+				_, err = w.Write([]byte(",\"body\":"))
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+				_, err = w.Write(body)
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+				_, err = w.Write([]byte(",\"signature\":\""))
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+				_, err = w.Write([]byte(signature))
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+				_, err = w.Write([]byte("\"}"))
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+				return
+
+			case http.MethodPut:
+				queryParameters := request.URL.Query()
+
+				if queryParameters.Get("action") != "login" {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				iamEndpoint := queryParameters.Get("iam")
+				if iamEndpoint == "" {
+					iamEndpoint = "https://iam.cloud.ibm.com"
+				}
+
+				trustedProfileName := queryParameters.Get("profile-name")
+				if trustedProfileName == "" {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				requestBody := url.Values{}
+				requestBody.Set("grant_type", "urn:ibm:params:oauth:grant-type:cr-token")
+				requestBody.Set("cr_token", string(tokenFileData))
+				requestBody.Set("profile_name", trustedProfileName)
+
+				iamResponse, err := http.Post(fmt.Sprintf("%s/identity/token", iamEndpoint), "application/x-www-form-urlencoded", strings.NewReader(requestBody.Encode()))
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, "%v", err)
+					return
+				}
+
+				defer iamResponse.Body.Close()
+
+				if iamResponse.StatusCode == http.StatusOK {
+					log.Printf("Successfully created access token from compute resource token for trusted profile %s", trustedProfileName)
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+
+				iamResponseBody, _ := io.ReadAll(iamResponse.Body)
+				log.Printf("Failed to create access token from compute resource token for trusted profile %s. Status: %d. Body: %s", trustedProfileName, iamResponse.StatusCode, string(iamResponseBody))
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		})
+
 		http.HandleFunc("/env", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != "GET" {
+			if request.Method != http.MethodGet {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
@@ -181,7 +322,7 @@ func main() {
 		})
 
 		http.HandleFunc("/livecheck", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != "PUT" {
+			if request.Method != http.MethodPut {
 				w.WriteHeader(livecheckCode)
 				return
 			}
@@ -202,7 +343,7 @@ func main() {
 		})
 
 		http.HandleFunc("/request-header", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != "GET" {
+			if request.Method != http.MethodGet {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
@@ -295,7 +436,7 @@ func main() {
 			_, err = rand.Read(message)
 			if err != nil {
 				log.Printf("Error while creating random message: %v", err)
-				w.WriteHeader(500)
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 

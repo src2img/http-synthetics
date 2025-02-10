@@ -11,6 +11,11 @@ An HTTP server with test methods for synthetic tests:
   * `force` (default `false`) can be set to `true`. The code then calls the forceful `Close()` instead of the graceful `Shutdown()` function on the Go HTTP server.
   * `silent` (default `false`) can be set to `true`. The shutdown will then not be logged.
   * `terminate` (default `true`) can be set to `false`. The code will then after shutting down the server not end the process but wait for another SIGINT or SIGTERM signal.
+* `GET /compute-resource-token` returns details about the mounted compute resource token in the container, or a 404 if no one is present.
+* `PUT /compute-resource-token?action=login&iam=https://iam.cloud.ibm.com&profile-name=someTrustedProfileName` tries to use the mounted compute resource token to create an IAM access token. Returns 204 if that succeeds, 404 is no compute resource token is mounted, 403 if no access token could be created. Query parameters:
+  * `action` must be set to `login`.
+  * `iam` (default `https://iam.cloud.ibm.com`) allows to overwrite the IAM endpoint.
+  * `profileName` specifies the name of the trusted profile.
 * `GET /env?env=someEnvKey` returns the value of an environment variable in the response body.
 * `GET /flaky?code=503` will return a 503 on every other call, with 200 on the respective next call. The `code` can be omitted, it will default to `502`.
 * `GET /livecheck` returns 204 initially. `PUT /livecheck?code=newCode` changes this.
