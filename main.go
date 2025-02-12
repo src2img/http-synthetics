@@ -452,6 +452,42 @@ func main() {
 			}
 		})
 
+		http.HandleFunc("/filesystem", func(w http.ResponseWriter, r *http.Request) {
+			queryParameters := r.URL.Query()
+			var path string
+			if queryParameters.Has("path") {
+				path = queryParameters.Get("path")
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			fileInfo, err := os.Stat(path)
+			if os.IsNotExist(err) {
+				log.Printf("Mount not found : %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			} else if err != nil {
+				log.Printf("Error accessing mount: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if fileInfo.IsDir() {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				if r.Method == http.MethodGet {
+					data, err := os.ReadFile(path)
+					if err != nil {
+						log.Printf("Error reading file: %v", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					fmt.Fprintf(w, "File content: %s", string(data))
+				}
+				w.WriteHeader(http.StatusOK)
+			}
+		})
+
 		http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
 			log.Printf("starting websocket handler for an echo service")
 
