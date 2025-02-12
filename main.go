@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -450,6 +451,41 @@ func main() {
 					return
 				}
 			}
+		})
+
+		http.HandleFunc("/mount-health-check", func(w http.ResponseWriter, r *http.Request) {
+			queryParameters := r.URL.Query()
+			var mountPath string
+			if queryParameters.Has("path") {
+				mountPath = queryParameters.Get("path")
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, err := os.Stat(mountPath)
+			if os.IsNotExist(err) {
+				log.Printf("Mount not found : %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			} else if err != nil {
+				log.Printf("Error accessing mount: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if queryParameters.Has("file") {
+				fileName := r.URL.Query().Get("file")
+				filePath := filepath.Join(mountPath, fileName)
+
+				data, err := os.ReadFile(filePath)
+				if err != nil {
+					log.Printf("Error reading file: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				fmt.Fprintf(w, "File content: %s", string(data))
+			}
+			fmt.Fprintln(w, "Mount is working correctly")
 		})
 
 		http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
