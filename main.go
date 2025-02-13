@@ -463,11 +463,11 @@ func main() {
 			}
 			fileInfo, err := os.Stat(path)
 			if os.IsNotExist(err) {
-				log.Printf("Mount not found : %v", err)
-				w.WriteHeader(http.StatusInternalServerError)
+				log.Printf("Path not found : %v", err)
+				w.WriteHeader(http.StatusNotFound)
 				return
 			} else if err != nil {
-				log.Printf("Error accessing mount: %v", err)
+				log.Printf("Error checking path: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
@@ -475,6 +475,7 @@ func main() {
 			if fileInfo.IsDir() {
 				w.WriteHeader(http.StatusNoContent)
 			} else {
+				w.Header().Set("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
 				if r.Method == http.MethodGet {
 					data, err := os.ReadFile(path)
 					if err != nil {
@@ -482,7 +483,8 @@ func main() {
 						w.WriteHeader(http.StatusInternalServerError)
 						return
 					}
-					fmt.Fprintf(w, "File content: %s", string(data))
+					fmt.Fprintf(w, "File content length: %d", len(data))
+					w.Write(data)
 				}
 				w.WriteHeader(http.StatusOK)
 			}
