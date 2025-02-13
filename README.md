@@ -3,8 +3,8 @@
 An HTTP server with test methods for synthetic tests:
 
 * `GET /` is a hello-world.
-* `GET /call-after-server-shutdown?url=https://someurl` returns a 204 and will cause the provided URL to be called after stopping the server. Optionally, a `delay` can be provided to override a wait time in seconds (default is 5s).
 * `GET /before-server-shutdown?url=https://someurl` returns a 204 and will cause the provided URL to be called when a SIGTERM signal is captured and before stopping the server. Optionally, a `delay` can be provided to override a wait time in seconds (default is 5s).
+* `GET /call-after-server-shutdown?url=https://someurl` returns a 204 and will cause the provided URL to be called after stopping the server. Optionally, a `delay` can be provided to override a wait time in seconds (default is 5s).
 * `PUT /claim-memory?amount=<bytes_count>` returns a 204 but before that creates a `byte[]` slice of the given length. If it goes oom, then it dies. ;-)
 * `GET /close` will cause the server to be shut down. Query parameters:
   * `delay` (default `0`) can be set to a positive number. The code will then wait the amount in seconds before the server is shut down.
@@ -17,6 +17,8 @@ An HTTP server with test methods for synthetic tests:
   * `iam` (default `https://iam.cloud.ibm.com`) allows to overwrite the IAM endpoint.
   * `profileName` specifies the name of the trusted profile.
 * `GET /env?env=someEnvKey` returns the value of an environment variable in the response body.
+* `GET /filesystem?path=<path>`, returns 200 with the file content if the path exists and is a file, 204 if it exists but is a directory, 404 if not found, and 500 for any other error.
+* `HEAD /filesystem?path=<path>`, returns 200 if the path exists and is a file, 204 if it exists but is a directory, 404 if not found, and 500 for any other error.
 * `GET /flaky?code=503` will return a 503 on every other call, with 200 on the respective next call. The `code` can be omitted, it will default to `502`.
 * `GET /livecheck` returns 204 initially. `PUT /livecheck?code=newCode` changes this.
 `delay` argument can be provided which overrides the default five seconds that it waits before it performs the call.
