@@ -483,7 +483,7 @@ func main() {
 						w.WriteHeader(http.StatusInternalServerError)
 						return
 					}
-					fmt.Fprintf(w, "File content length: %d", len(data))
+					log.Printf("File content length: %d", len(data))
 					w.Write(data)
 				}
 				w.WriteHeader(http.StatusOK)
