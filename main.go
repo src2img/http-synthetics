@@ -484,9 +484,10 @@ func main() {
 						return
 					}
 					log.Printf("File content length: %d", len(data))
-					w.Write(data)
+					if _, err = w.Write(data); err != nil {
+						log.Printf("Error writing data: %v", err)
+					}
 				}
-				w.WriteHeader(http.StatusOK)
 			}
 		})
 
