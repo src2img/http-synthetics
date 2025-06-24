@@ -20,6 +20,8 @@ An HTTP server with test methods for synthetic tests:
 * `GET /filesystem?path=<path>`, returns 200 with the file content if the path exists and is a file, 204 if it exists but is a directory, 404 if not found, and 500 for any other error.
 * `HEAD /filesystem?path=<path>`, returns 200 if the path exists and is a file, 204 if it exists but is a directory, 404 if not found, and 500 for any other error.
 * `GET /flaky?code=503` will return a 503 on every other call, with 200 on the respective next call. The `code` can be omitted, it will default to `502`.
+* `GET /get-url?url=<target-url>`, performs a GET request to the target URL and returns the response headers and body from the target.
+* `HEAD /get-url?url=<target-url>`, performs a GET request to the target URL but only returns the status code from the response.
 * `GET /livecheck` returns 204 initially. `PUT /livecheck?code=newCode` changes this.
 `delay` argument can be provided which overrides the default five seconds that it waits before it performs the call.
 * `GET /request-header?header=someHeaderKey` returns the value of a request header in the response body. If the header is present multiple times, then the response contains all values concatenated by comma.
