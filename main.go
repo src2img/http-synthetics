@@ -492,6 +492,11 @@ func main() {
 		})
 
 		http.HandleFunc("/get-url", func(w http.ResponseWriter, r *http.Request) {
+			// Only GET and HEAD is allowed
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				http.Error(w, "Only GET and HEAD are supported", http.StatusMethodNotAllowed)
+			}
+
 			queryParameters := r.URL.Query()
 			var targetUrl string
 			if queryParameters.Has("url") {
@@ -508,29 +513,18 @@ func main() {
 			}
 			defer resp.Body.Close()
 
-			if r.Method == http.MethodHead {
-				// Just return the status code
-				w.WriteHeader(resp.StatusCode)
-				return
-			}
-
-			if r.Method == http.MethodGet {
-				// Copy headers
-				for key, values := range resp.Header {
-					for _, v := range values {
-						w.Header().Add(key, v)
-					}
+			// Copy headers
+			for key, values := range resp.Header {
+				for _, v := range values {
+					w.Header().Add(key, v)
 				}
-
-				// Set status code and copy body
-				w.WriteHeader(resp.StatusCode)
+			}
+			// Set status code
+			w.WriteHeader(resp.StatusCode)
+			if r.Method == http.MethodGet {
 				_, _ = io.Copy(w, resp.Body)
 				return
 			}
-
-			// Other methods not allowed
-			http.Error(w, "Only GET and HEAD are supported", http.StatusMethodNotAllowed)
-
 		})
 
 		http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
