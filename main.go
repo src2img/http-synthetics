@@ -491,6 +491,42 @@ func main() {
 			}
 		})
 
+		http.HandleFunc("/get-url", func(w http.ResponseWriter, r *http.Request) {
+			// Only GET and HEAD is allowed
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				http.Error(w, "Only GET and HEAD are supported", http.StatusMethodNotAllowed)
+			}
+
+			queryParameters := r.URL.Query()
+			var targetUrl string
+			if queryParameters.Has("url") {
+				targetUrl = queryParameters.Get("url")
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			resp, err := http.Get(targetUrl)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Request to target failed: %v", err), http.StatusBadGateway)
+				return
+			}
+			defer resp.Body.Close()
+
+			// Copy headers
+			for key, values := range resp.Header {
+				for _, v := range values {
+					w.Header().Add(key, v)
+				}
+			}
+			// Set status code
+			w.WriteHeader(resp.StatusCode)
+			if r.Method == http.MethodGet {
+				_, _ = io.Copy(w, resp.Body)
+				return
+			}
+		})
+
 		http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
 			log.Printf("starting websocket handler for an echo service")
 
