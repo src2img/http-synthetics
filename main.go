@@ -538,6 +538,40 @@ func main() {
 			log.Printf("stopping websocket handler after copying %d bytes", count)
 		}))
 
+		http.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			clientDoneCh := r.Context().Done()
+			rc := http.NewResponseController(w)
+
+			for i := range 10 {
+				select {
+				case <-clientDoneCh:
+					log.Printf("sse: client disconnected")
+					return
+				default:
+					log.Printf("sse: writing time event %d/10", i)
+
+					_, err := fmt.Fprintf(w, "data: Hello world!\n\n")
+					if err != nil {
+						log.Printf("sse: failed to write event: %v", err)
+						return
+					}
+
+					err = rc.Flush()
+					if err != nil {
+						log.Printf("sse: failed to flush: %v", err)
+						return
+					}
+
+					time.Sleep(time.Second)
+				}
+			}
+			log.Printf("sse: finished writing events, closing connection..")
+		})
+
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("failed to start server: %v", err)
 		}
