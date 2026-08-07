@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -525,6 +526,45 @@ func main() {
 				_, _ = io.Copy(w, resp.Body)
 				return
 			}
+		})
+
+		// /dns-lookup resolves the hostname of the given URL via DNS and returns the IPs
+		http.HandleFunc("/dns-lookup", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
+				return
+			}
+
+			queryParameters := r.URL.Query()
+			if !queryParameters.Has("host") {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			host := queryParameters.Get("host")
+
+			if strings.Contains(host, "://") {
+				parsed, err := url.Parse(host)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Invalid URL: %v", err), http.StatusBadRequest)
+					return
+				}
+				host = parsed.Hostname()
+			}
+
+			netIPs, err := net.LookupIP(host)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("DNS lookup failed: %v", err), http.StatusBadGateway)
+				return
+			}
+
+			ips := make([]string, len(netIPs))
+			for i, ip := range netIPs {
+				ips[i] = ip.String()
+			}
+
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(strings.Join(ips, "\n")))
 		})
 
 		http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
