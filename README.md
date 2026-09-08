@@ -11,6 +11,7 @@ An HTTP server with test methods for synthetic tests:
   * `force` (default `false`) can be set to `true`. The code then calls the forceful `Close()` instead of the graceful `Shutdown()` function on the Go HTTP server.
   * `silent` (default `false`) can be set to `true`. The shutdown will then not be logged.
   * `terminate` (default `true`) can be set to `false`. The code will then after shutting down the server not end the process but wait for another SIGINT or SIGTERM signal.
+* `PUT /close-permanently` will cause the server to be shut down cleanly. On startup will never start the server if a given file exists, which can be configured using an environment variable `CLOSE_PERMANENTLY_PATH` to where this file will be written and read from. Requires persistent storage to function. Signals can still be received.
 * `GET /compute-resource-token` returns details about the mounted compute resource token in the container, or a 404 if no one is present.
 * `PUT /compute-resource-token?action=login&iam=https://iam.cloud.ibm.com&profile-name=someTrustedProfileName` tries to use the mounted compute resource token to create an IAM access token. Returns 204 if that succeeds, 404 is no compute resource token is mounted, 403 if no access token could be created. Query parameters:
   * `action` must be set to `login`.

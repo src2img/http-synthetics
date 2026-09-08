@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -24,6 +26,8 @@ import (
 )
 
 var toggle bool
+
+const CLOSE_PERMANENTLY_FILE_NAME = "close-permanently"
 
 func main() {
 	ctx := context.Background()
@@ -37,7 +41,10 @@ func main() {
 		}
 	}
 
-	srv := &http.Server{Addr: fmt.Sprintf(":%d", port)}
+	path := os.TempDir()
+	if pathStr, ok := os.LookupEnv("CLOSE_PERMANENTLY_PATH"); ok {
+		path = pathStr
+	}
 
 	var afterShutDownUrl *string
 	afterShutDownUrlDelay := 5 * time.Second
@@ -50,572 +57,597 @@ func main() {
 	var doNotTerminate = false
 	var silentShutdown = false
 	var forceClose = false
+	srv := &http.Server{Addr: fmt.Sprintf(":%d", port)}
 
-	go func() {
-		http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-			log.Println("Answering a Hello World request")
-			fmt.Fprintf(w, "Hello, World! I am using %s by the way.", runtime.Version())
-		})
+	_, err := os.Open(filepath.Join(path, CLOSE_PERMANENTLY_FILE_NAME))
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		go func() {
+			http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+				log.Println("Answering a Hello World request")
+				fmt.Fprintf(w, "Hello, World! I am using %s by the way.", runtime.Version())
+			})
 
-		http.HandleFunc("/call-after-server-shutdown", func(w http.ResponseWriter, request *http.Request) {
-			queryParameters := request.URL.Query()
-			if !queryParameters.Has("url") {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
+			http.HandleFunc("/call-after-server-shutdown", func(w http.ResponseWriter, request *http.Request) {
+				queryParameters := request.URL.Query()
+				if !queryParameters.Has("url") {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
 
-			url := queryParameters.Get("url")
-			afterShutDownUrl = &url
+				url := queryParameters.Get("url")
+				afterShutDownUrl = &url
 
-			if queryParameters.Has("delay") {
-				delay, err := strconv.Atoi(queryParameters.Get("delay"))
+				if queryParameters.Has("delay") {
+					delay, err := strconv.Atoi(queryParameters.Get("delay"))
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					afterShutDownUrlDelay = time.Duration(delay) * time.Second
+				}
+
+				w.WriteHeader(http.StatusNoContent)
+			})
+
+			http.HandleFunc("/call-before-server-shutdown", func(w http.ResponseWriter, request *http.Request) {
+				queryParameters := request.URL.Query()
+				if !queryParameters.Has("url") {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				url := queryParameters.Get("url")
+				sigtermUrl = &url
+
+				if queryParameters.Has("delay") {
+					delay, err := strconv.Atoi(queryParameters.Get("delay"))
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					sigtermUrlDelay = time.Duration(delay) * time.Second
+				}
+
+				w.WriteHeader(http.StatusNoContent)
+			})
+
+			http.HandleFunc("/claim-memory", func(w http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPut {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+
+				queryParameters := request.URL.Query()
+
+				if !queryParameters.Has("amount") {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				amount, err := strconv.Atoi(queryParameters.Get("amount"))
 				if err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-				afterShutDownUrlDelay = time.Duration(delay) * time.Second
-			}
 
-			w.WriteHeader(http.StatusNoContent)
-		})
+				data := make([]byte, amount)
+				for i := 0; i < amount; i++ {
+					data[i] = byte(i % 256)
+				}
 
-		http.HandleFunc("/call-before-server-shutdown", func(w http.ResponseWriter, request *http.Request) {
-			queryParameters := request.URL.Query()
-			if !queryParameters.Has("url") {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
+				w.WriteHeader(http.StatusNoContent)
+			})
 
-			url := queryParameters.Get("url")
-			sigtermUrl = &url
+			http.HandleFunc("/close", func(w http.ResponseWriter, request *http.Request) {
+				queryParameters := request.URL.Query()
 
-			if queryParameters.Has("delay") {
-				delay, err := strconv.Atoi(queryParameters.Get("delay"))
-				if err != nil {
-					w.WriteHeader(http.StatusBadRequest)
+				if queryParameters.Get("force") == "true" {
+					forceClose = true
+				}
+
+				if queryParameters.Get("silent") == "true" {
+					silentShutdown = true
+				}
+
+				if queryParameters.Get("terminate") == "false" {
+					doNotTerminate = true
+				}
+
+				delay := 0
+
+				if queryParameters.Has("delay") {
+					var err error
+					delay, err = strconv.Atoi(queryParameters.Get("delay"))
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+				}
+
+				w.WriteHeader(http.StatusAccepted)
+
+				go func() {
+					time.Sleep(time.Duration(delay) * time.Second)
+					signals <- os.Interrupt
+				}()
+			})
+
+			http.HandleFunc("/close-permanently", func(w http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPut {
+					w.WriteHeader(http.StatusMethodNotAllowed)
 					return
 				}
-				sigtermUrlDelay = time.Duration(delay) * time.Second
-			}
 
-			w.WriteHeader(http.StatusNoContent)
-		})
-
-		http.HandleFunc("/claim-memory", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != http.MethodPut {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-
-			queryParameters := request.URL.Query()
-
-			if !queryParameters.Has("amount") {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			amount, err := strconv.Atoi(queryParameters.Get("amount"))
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			data := make([]byte, amount)
-			for i := 0; i < amount; i++ {
-				data[i] = byte(i % 256)
-			}
-
-			w.WriteHeader(http.StatusNoContent)
-		})
-
-		http.HandleFunc("/close", func(w http.ResponseWriter, request *http.Request) {
-			queryParameters := request.URL.Query()
-
-			if queryParameters.Get("force") == "true" {
-				forceClose = true
-			}
-
-			if queryParameters.Get("silent") == "true" {
-				silentShutdown = true
-			}
-
-			if queryParameters.Get("terminate") == "false" {
-				doNotTerminate = true
-			}
-
-			delay := 0
-
-			if queryParameters.Has("delay") {
-				var err error
-				delay, err = strconv.Atoi(queryParameters.Get("delay"))
+				_, err := os.Create(filepath.Join(path, CLOSE_PERMANENTLY_FILE_NAME))
 				if err != nil {
-					w.WriteHeader(http.StatusBadRequest)
+					log.Printf("Error while creating file: %v", err)
 					return
 				}
-			}
 
-			w.WriteHeader(http.StatusAccepted)
+				w.WriteHeader(http.StatusAccepted)
 
-			go func() {
-				time.Sleep(time.Duration(delay) * time.Second)
-				signals <- os.Interrupt
-			}()
-		})
+				go func() {
+					signals <- os.Interrupt
+				}()
+			})
 
-		http.HandleFunc("/compute-resource-token", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != http.MethodGet && request.Method != http.MethodPut {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
+			http.HandleFunc("/compute-resource-token", func(w http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet && request.Method != http.MethodPut {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
 
-			tokenFileInfo, err := os.Stat("/var/run/secrets/codeengine.cloud.ibm.com/compute-resource-token/token")
-			if err != nil {
-				if os.IsNotExist(err) {
+				tokenFileInfo, err := os.Stat("/var/run/secrets/codeengine.cloud.ibm.com/compute-resource-token/token")
+				if err != nil {
+					if os.IsNotExist(err) {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, "%v", err)
+					return
+				}
+
+				if tokenFileInfo.IsDir() {
 					w.WriteHeader(http.StatusNotFound)
 					return
 				}
 
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "%v", err)
-				return
-			}
-
-			if tokenFileInfo.IsDir() {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-
-			tokenFileData, err := os.ReadFile("/var/run/secrets/codeengine.cloud.ibm.com/compute-resource-token/token")
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "%v", err)
-				return
-			}
-
-			switch request.Method {
-			case http.MethodGet:
-				tokenParts := strings.Split(string(tokenFileData), ".")
-				if len(tokenParts) != 3 {
-					w.WriteHeader(http.StatusInternalServerError)
-					fmt.Fprintf(w, "expected three parts in token file separated by dot, but found %d", len(tokenParts))
-					return
-				}
-
-				header, err := base64.RawURLEncoding.DecodeString(tokenParts[0])
+				tokenFileData, err := os.ReadFile("/var/run/secrets/codeengine.cloud.ibm.com/compute-resource-token/token")
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
 					fmt.Fprintf(w, "%v", err)
 					return
 				}
 
-				body, err := base64.RawURLEncoding.DecodeString(tokenParts[1])
-				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					fmt.Fprintf(w, "%v", err)
+				switch request.Method {
+				case http.MethodGet:
+					tokenParts := strings.Split(string(tokenFileData), ".")
+					if len(tokenParts) != 3 {
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprintf(w, "expected three parts in token file separated by dot, but found %d", len(tokenParts))
+						return
+					}
+
+					header, err := base64.RawURLEncoding.DecodeString(tokenParts[0])
+					if err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprintf(w, "%v", err)
+						return
+					}
+
+					body, err := base64.RawURLEncoding.DecodeString(tokenParts[1])
+					if err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprintf(w, "%v", err)
+						return
+					}
+
+					signature := tokenParts[2]
+
+					w.Header().Add("Content-Type", "application/json")
+					_, err = w.Write([]byte("{\"header\":"))
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+					_, err = w.Write(header)
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+					_, err = w.Write([]byte(",\"body\":"))
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+					_, err = w.Write(body)
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+					_, err = w.Write([]byte(",\"signature\":\""))
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+					_, err = w.Write([]byte(signature))
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+					_, err = w.Write([]byte("\"}"))
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+					return
+
+				case http.MethodPut:
+					queryParameters := request.URL.Query()
+
+					if queryParameters.Get("action") != "login" {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+
+					iamEndpoint := queryParameters.Get("iam")
+					if iamEndpoint == "" {
+						iamEndpoint = "https://iam.cloud.ibm.com"
+					}
+
+					trustedProfileName := queryParameters.Get("profile-name")
+					if trustedProfileName == "" {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+
+					requestBody := url.Values{}
+					requestBody.Set("grant_type", "urn:ibm:params:oauth:grant-type:cr-token")
+					requestBody.Set("cr_token", string(tokenFileData))
+					requestBody.Set("profile_name", trustedProfileName)
+
+					iamResponse, err := http.Post(fmt.Sprintf("%s/identity/token", iamEndpoint), "application/x-www-form-urlencoded", strings.NewReader(requestBody.Encode()))
+					if err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprintf(w, "%v", err)
+						return
+					}
+
+					defer iamResponse.Body.Close()
+
+					if iamResponse.StatusCode == http.StatusOK {
+						log.Printf("Successfully created access token from compute resource token for trusted profile %s", trustedProfileName)
+						w.WriteHeader(http.StatusNoContent)
+						return
+					}
+
+					iamResponseBody, _ := io.ReadAll(iamResponse.Body)
+					log.Printf("Failed to create access token from compute resource token for trusted profile %s. Status: %d. Body: %s", trustedProfileName, iamResponse.StatusCode, string(iamResponseBody))
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+			})
+
+			http.HandleFunc("/env", func(w http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet {
+					w.WriteHeader(http.StatusMethodNotAllowed)
 					return
 				}
 
-				signature := tokenParts[2]
+				queryParameters := request.URL.Query()
+				if !queryParameters.Has("env") {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
 
-				w.Header().Add("Content-Type", "application/json")
-				_, err = w.Write([]byte("{\"header\":"))
-				if err != nil {
-					log.Printf("Error while writing message: %v", err)
-					return
-				}
-				_, err = w.Write(header)
-				if err != nil {
-					log.Printf("Error while writing message: %v", err)
-					return
-				}
-				_, err = w.Write([]byte(",\"body\":"))
-				if err != nil {
-					log.Printf("Error while writing message: %v", err)
-					return
-				}
-				_, err = w.Write(body)
-				if err != nil {
-					log.Printf("Error while writing message: %v", err)
-					return
-				}
-				_, err = w.Write([]byte(",\"signature\":\""))
-				if err != nil {
-					log.Printf("Error while writing message: %v", err)
-					return
-				}
-				_, err = w.Write([]byte(signature))
-				if err != nil {
-					log.Printf("Error while writing message: %v", err)
-					return
-				}
-				_, err = w.Write([]byte("\"}"))
-				if err != nil {
-					log.Printf("Error while writing message: %v", err)
-					return
-				}
-				return
+				w.WriteHeader(http.StatusOK)
 
-			case http.MethodPut:
+				_, err := w.Write([]byte(os.Getenv(queryParameters.Get("env"))))
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+			})
+
+			http.HandleFunc("/livecheck", func(w http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPut {
+					w.WriteHeader(livecheckCode)
+					return
+				}
+
+				queryParameters := request.URL.Query()
+				if !queryParameters.Has("code") {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				code, err := strconv.Atoi(queryParameters.Get("code"))
+				if err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				livecheckCode = code
+				w.WriteHeader(http.StatusNoContent)
+			})
+
+			http.HandleFunc("/request-header", func(w http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+
+				queryParameters := request.URL.Query()
+				if !queryParameters.Has("header") {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				w.WriteHeader(http.StatusOK)
+
+				headerValues, exists := request.Header[queryParameters.Get("header")]
+				if !exists {
+					return
+				}
+
+				_, err := w.Write([]byte(strings.Join(headerValues, ",")))
+				if err != nil {
+					log.Printf("Error while writing message: %v", err)
+					return
+				}
+			})
+
+			http.HandleFunc("/sleep", func(w http.ResponseWriter, request *http.Request) {
+				queryParameters := request.URL.Query()
+				if queryParameters.Has("delay") {
+					seconds, err := strconv.Atoi(queryParameters.Get("delay"))
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					time.Sleep(time.Second * time.Duration(seconds))
+					w.WriteHeader(http.StatusNoContent)
+				} else {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			})
+
+			http.HandleFunc("/flaky", func(w http.ResponseWriter, request *http.Request) {
+				toggle = !toggle
+
+				var httpStatusCode int = http.StatusBadGateway
+				if queryParameters := request.URL.Query(); queryParameters.Has("code") {
+					var err error
+					httpStatusCode, err = strconv.Atoi(queryParameters.Get("code"))
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+				}
+
+				if toggle {
+					w.WriteHeader(http.StatusOK)
+				} else {
+					w.WriteHeader(httpStatusCode)
+				}
+			})
+
+			http.HandleFunc("/write-regularly", func(w http.ResponseWriter, request *http.Request) {
 				queryParameters := request.URL.Query()
 
-				if queryParameters.Get("action") != "login" {
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-
-				iamEndpoint := queryParameters.Get("iam")
-				if iamEndpoint == "" {
-					iamEndpoint = "https://iam.cloud.ibm.com"
-				}
-
-				trustedProfileName := queryParameters.Get("profile-name")
-				if trustedProfileName == "" {
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-
-				requestBody := url.Values{}
-				requestBody.Set("grant_type", "urn:ibm:params:oauth:grant-type:cr-token")
-				requestBody.Set("cr_token", string(tokenFileData))
-				requestBody.Set("profile_name", trustedProfileName)
-
-				iamResponse, err := http.Post(fmt.Sprintf("%s/identity/token", iamEndpoint), "application/x-www-form-urlencoded", strings.NewReader(requestBody.Encode()))
-				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					fmt.Fprintf(w, "%v", err)
-					return
-				}
-
-				defer iamResponse.Body.Close()
-
-				if iamResponse.StatusCode == http.StatusOK {
-					log.Printf("Successfully created access token from compute resource token for trusted profile %s", trustedProfileName)
-					w.WriteHeader(http.StatusNoContent)
-					return
-				}
-
-				iamResponseBody, _ := io.ReadAll(iamResponse.Body)
-				log.Printf("Failed to create access token from compute resource token for trusted profile %s. Status: %d. Body: %s", trustedProfileName, iamResponse.StatusCode, string(iamResponseBody))
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-		})
-
-		http.HandleFunc("/env", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != http.MethodGet {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-
-			queryParameters := request.URL.Query()
-			if !queryParameters.Has("env") {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-
-			_, err := w.Write([]byte(os.Getenv(queryParameters.Get("env"))))
-			if err != nil {
-				log.Printf("Error while writing message: %v", err)
-				return
-			}
-		})
-
-		http.HandleFunc("/livecheck", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != http.MethodPut {
-				w.WriteHeader(livecheckCode)
-				return
-			}
-
-			queryParameters := request.URL.Query()
-			if !queryParameters.Has("code") {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			code, err := strconv.Atoi(queryParameters.Get("code"))
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			livecheckCode = code
-			w.WriteHeader(http.StatusNoContent)
-		})
-
-		http.HandleFunc("/request-header", func(w http.ResponseWriter, request *http.Request) {
-			if request.Method != http.MethodGet {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-
-			queryParameters := request.URL.Query()
-			if !queryParameters.Has("header") {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-
-			headerValues, exists := request.Header[queryParameters.Get("header")]
-			if !exists {
-				return
-			}
-
-			_, err := w.Write([]byte(strings.Join(headerValues, ",")))
-			if err != nil {
-				log.Printf("Error while writing message: %v", err)
-				return
-			}
-		})
-
-		http.HandleFunc("/sleep", func(w http.ResponseWriter, request *http.Request) {
-			queryParameters := request.URL.Query()
-			if queryParameters.Has("delay") {
-				seconds, err := strconv.Atoi(queryParameters.Get("delay"))
-				if err != nil {
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				time.Sleep(time.Second * time.Duration(seconds))
-				w.WriteHeader(http.StatusNoContent)
-			} else {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-		})
-
-		http.HandleFunc("/flaky", func(w http.ResponseWriter, request *http.Request) {
-			toggle = !toggle
-
-			var httpStatusCode int = http.StatusBadGateway
-			if queryParameters := request.URL.Query(); queryParameters.Has("code") {
+				var intervalSeconds, count int
 				var err error
-				httpStatusCode, err = strconv.Atoi(queryParameters.Get("code"))
-				if err != nil {
+
+				if queryParameters.Has("interval") {
+					intervalSeconds, err = strconv.Atoi(queryParameters.Get("interval"))
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+				} else {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-			}
 
-			if toggle {
+				if queryParameters.Has("count") {
+					count, err = strconv.Atoi(queryParameters.Get("count"))
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+				} else {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+
+				message := make([]byte, 4<<10)
+				_, err = rand.Read(message)
+				if err != nil {
+					log.Printf("Error while creating random message: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+
 				w.WriteHeader(http.StatusOK)
-			} else {
-				w.WriteHeader(httpStatusCode)
-			}
-		})
 
-		http.HandleFunc("/write-regularly", func(w http.ResponseWriter, request *http.Request) {
-			queryParameters := request.URL.Query()
+				for i := 0; i < count; i++ {
+					time.Sleep(time.Duration(intervalSeconds) * time.Second)
+					_, err = w.Write(message)
+					if err != nil {
+						log.Printf("Error while writing message: %v", err)
+						return
+					}
+				}
+			})
 
-			var intervalSeconds, count int
-			var err error
-
-			if queryParameters.Has("interval") {
-				intervalSeconds, err = strconv.Atoi(queryParameters.Get("interval"))
-				if err != nil {
+			http.HandleFunc("/filesystem", func(w http.ResponseWriter, r *http.Request) {
+				queryParameters := r.URL.Query()
+				var path string
+				if queryParameters.Has("path") {
+					path = queryParameters.Get("path")
+				} else {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-			} else {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
+				fileInfo, err := os.Stat(path)
+				if os.IsNotExist(err) {
+					log.Printf("Path not found : %v", err)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				} else if err != nil {
+					log.Printf("Error checking path: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
 
-			if queryParameters.Has("count") {
-				count, err = strconv.Atoi(queryParameters.Get("count"))
-				if err != nil {
+				if fileInfo.IsDir() {
+					w.WriteHeader(http.StatusNoContent)
+				} else {
+					w.Header().Set("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
+					if r.Method == http.MethodGet {
+						data, err := os.ReadFile(path)
+						if err != nil {
+							log.Printf("Error reading file: %v", err)
+							w.WriteHeader(http.StatusInternalServerError)
+							return
+						}
+						log.Printf("File content length: %d", len(data))
+						if _, err = w.Write(data); err != nil {
+							log.Printf("Error writing data: %v", err)
+						}
+					}
+				}
+			})
+
+			http.HandleFunc("/get-url", func(w http.ResponseWriter, r *http.Request) {
+				// Only GET and HEAD is allowed
+				if r.Method != http.MethodGet && r.Method != http.MethodHead {
+					http.Error(w, "Only GET and HEAD are supported", http.StatusMethodNotAllowed)
+				}
+
+				queryParameters := r.URL.Query()
+				var targetUrl string
+				if queryParameters.Has("url") {
+					targetUrl = queryParameters.Get("url")
+				} else {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-			} else {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
 
-			message := make([]byte, 4<<10)
-			_, err = rand.Read(message)
-			if err != nil {
-				log.Printf("Error while creating random message: %v", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-
-			for i := 0; i < count; i++ {
-				time.Sleep(time.Duration(intervalSeconds) * time.Second)
-				_, err = w.Write(message)
+				resp, err := http.Get(targetUrl)
 				if err != nil {
-					log.Printf("Error while writing message: %v", err)
+					http.Error(w, fmt.Sprintf("Request to target failed: %v", err), http.StatusBadGateway)
 					return
 				}
-			}
-		})
+				defer resp.Body.Close()
 
-		http.HandleFunc("/filesystem", func(w http.ResponseWriter, r *http.Request) {
-			queryParameters := r.URL.Query()
-			var path string
-			if queryParameters.Has("path") {
-				path = queryParameters.Get("path")
-			} else {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			fileInfo, err := os.Stat(path)
-			if os.IsNotExist(err) {
-				log.Printf("Path not found : %v", err)
-				w.WriteHeader(http.StatusNotFound)
-				return
-			} else if err != nil {
-				log.Printf("Error checking path: %v", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			if fileInfo.IsDir() {
-				w.WriteHeader(http.StatusNoContent)
-			} else {
-				w.Header().Set("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
+				// Copy headers
+				for key, values := range resp.Header {
+					for _, v := range values {
+						w.Header().Add(key, v)
+					}
+				}
+				// Set status code
+				w.WriteHeader(resp.StatusCode)
 				if r.Method == http.MethodGet {
-					data, err := os.ReadFile(path)
+					_, _ = io.Copy(w, resp.Body)
+					return
+				}
+			})
+
+			// /dns-lookup resolves the hostname of the given URL via DNS and returns the IPs
+			http.HandleFunc("/dns-lookup", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
+					return
+				}
+
+				queryParameters := r.URL.Query()
+				if !queryParameters.Has("host") {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				host := queryParameters.Get("host")
+
+				if strings.Contains(host, "://") {
+					parsed, err := url.Parse(host)
 					if err != nil {
-						log.Printf("Error reading file: %v", err)
-						w.WriteHeader(http.StatusInternalServerError)
+						http.Error(w, fmt.Sprintf("Invalid URL: %v", err), http.StatusBadRequest)
 						return
 					}
-					log.Printf("File content length: %d", len(data))
-					if _, err = w.Write(data); err != nil {
-						log.Printf("Error writing data: %v", err)
-					}
+					host = parsed.Hostname()
 				}
-			}
-		})
 
-		http.HandleFunc("/get-url", func(w http.ResponseWriter, r *http.Request) {
-			// Only GET and HEAD is allowed
-			if r.Method != http.MethodGet && r.Method != http.MethodHead {
-				http.Error(w, "Only GET and HEAD are supported", http.StatusMethodNotAllowed)
-			}
-
-			queryParameters := r.URL.Query()
-			var targetUrl string
-			if queryParameters.Has("url") {
-				targetUrl = queryParameters.Get("url")
-			} else {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			resp, err := http.Get(targetUrl)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Request to target failed: %v", err), http.StatusBadGateway)
-				return
-			}
-			defer resp.Body.Close()
-
-			// Copy headers
-			for key, values := range resp.Header {
-				for _, v := range values {
-					w.Header().Add(key, v)
-				}
-			}
-			// Set status code
-			w.WriteHeader(resp.StatusCode)
-			if r.Method == http.MethodGet {
-				_, _ = io.Copy(w, resp.Body)
-				return
-			}
-		})
-
-		// /dns-lookup resolves the hostname of the given URL via DNS and returns the IPs
-		http.HandleFunc("/dns-lookup", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
-				return
-			}
-
-			queryParameters := r.URL.Query()
-			if !queryParameters.Has("host") {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			host := queryParameters.Get("host")
-
-			if strings.Contains(host, "://") {
-				parsed, err := url.Parse(host)
+				netIPs, err := net.LookupIP(host)
 				if err != nil {
-					http.Error(w, fmt.Sprintf("Invalid URL: %v", err), http.StatusBadRequest)
+					http.Error(w, fmt.Sprintf("DNS lookup failed: %v", err), http.StatusBadGateway)
 					return
 				}
-				host = parsed.Hostname()
-			}
 
-			netIPs, err := net.LookupIP(host)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("DNS lookup failed: %v", err), http.StatusBadGateway)
-				return
-			}
-
-			ips := make([]string, len(netIPs))
-			for i, ip := range netIPs {
-				ips[i] = ip.String()
-			}
-
-			w.Header().Set("Content-Type", "text/plain")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(strings.Join(ips, "\n")))
-		})
-
-		http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
-			log.Printf("starting websocket handler for an echo service")
-
-			count, err := io.Copy(ws, ws)
-			if err != nil {
-				log.Printf("copy failed in websocket handler: %v", err)
-			}
-
-			log.Printf("stopping websocket handler after copying %d bytes", count)
-		}))
-
-		http.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-
-			clientDoneCh := r.Context().Done()
-			rc := http.NewResponseController(w)
-
-			for i := range 10 {
-				select {
-				case <-clientDoneCh:
-					log.Printf("sse: client disconnected")
-					return
-				default:
-					log.Printf("sse: writing time event %d/10", i)
-
-					_, err := fmt.Fprintf(w, "data: Hello world!\n\n")
-					if err != nil {
-						log.Printf("sse: failed to write event: %v", err)
-						return
-					}
-
-					err = rc.Flush()
-					if err != nil {
-						log.Printf("sse: failed to flush: %v", err)
-						return
-					}
-
-					time.Sleep(time.Second)
+				ips := make([]string, len(netIPs))
+				for i, ip := range netIPs {
+					ips[i] = ip.String()
 				}
-			}
-			log.Printf("sse: finished writing events, closing connection..")
-		})
 
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("failed to start server: %v", err)
-		}
-	}()
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(strings.Join(ips, "\n")))
+			})
+
+			http.Handle("/ws", websocket.Handler(func(ws *websocket.Conn) {
+				log.Printf("starting websocket handler for an echo service")
+
+				count, err := io.Copy(ws, ws)
+				if err != nil {
+					log.Printf("copy failed in websocket handler: %v", err)
+				}
+
+				log.Printf("stopping websocket handler after copying %d bytes", count)
+			}))
+
+			http.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+
+				clientDoneCh := r.Context().Done()
+				rc := http.NewResponseController(w)
+
+				for i := range 10 {
+					select {
+					case <-clientDoneCh:
+						log.Printf("sse: client disconnected")
+						return
+					default:
+						log.Printf("sse: writing time event %d/10", i)
+
+						_, err := fmt.Fprintf(w, "data: Hello world!\n\n")
+						if err != nil {
+							log.Printf("sse: failed to write event: %v", err)
+							return
+						}
+
+						err = rc.Flush()
+						if err != nil {
+							log.Printf("sse: failed to flush: %v", err)
+							return
+						}
+
+						time.Sleep(time.Second)
+					}
+				}
+				log.Printf("sse: finished writing events, closing connection..")
+			})
+
+			if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+				log.Fatalf("failed to start server: %v", err)
+			}
+		}()
+	} else if err == nil {
+		log.Print("Not opening server.")
+	}
 
 	<-signals
 
